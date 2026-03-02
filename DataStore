@@ -1,0 +1,236 @@
+
+This is a DataStore Script for my Roblox Fashio Drawing Game
+
+It Saves compressed Pixels and loads them back onto a canvas 
+
+---- Services ----
+
+local Players = game:GetService("Players")
+local Rs = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
+
+---- ModuleScripts ----
+
+local LoadBodyPartMeshesScript = require(Rs.ModuleScripts.ServerScripts.SetupBodyMeshes)
+local WaitChrLoadedScript = require(Rs.ModuleScripts.ServerScripts.WaitChrLoadedScript)
+local SetupBodyMeshesScript = require(Rs.ModuleScripts.ServerScripts.SetupBodyMeshes)
+
+---- DataRelated ----
+
+local StatsData = DataStoreService:GetDataStore("StatsData_V1")
+local PixelDataAvatar01 = DataStoreService:GetDataStore("PixelData_V1")
+local PixelDataAvatar02 = DataStoreService:GetDataStore("PixelData_V2")
+
+---- Remotes ----
+
+local StartTutorialRemoteFunction = Rs.RemoteFunctions.ServerToClient.StartTutorialRemoteFunction
+local LoadInventoryFunction = Rs.RemoteFunctions.ClientToServer.LoadInventoryFunction
+local UpdateAvatarEvent = Rs.RemoteEvents.ClientToServer.UpdateAvatar
+local GetDataFunction = Rs.BindableEvent.Server.GetData
+
+---- Tables ----
+
+local StarterData = {
+	Credits = 25,
+	Wins = 0,
+	Awards = 0,
+	Donations = 0,
+	IsNewPlr = true,
+	
+	ActiveBody = {
+		"DefaultBody"
+	},
+	
+	ActiveAccessories = {
+		{Id = "rbxassetid://110682482757275", Parent = "Head", MeshTyp = "Hair"}
+	},
+	
+	OwnedBody = {
+		"DefaultBody"
+	},
+	
+	OwnedAccessories = {
+		{Id = "rbxassetid://110682482757275", Parent = "Head", MeshTyp = "Hair"},
+		{Id = "rbxassetid://102643999725246", Parent = "Head", MeshTyp = "Hair"}
+	}
+}
+
+local PlrPixelData = {}
+local StatsDataFetching = {}
+
+---- Functions ----
+
+local function MergeData(Data)
+	for i, v in pairs(StarterData) do
+		if Data[i] == nil then
+			Data[i] = v
+		end
+	end
+	
+	print(Data)
+	
+	return Data
+end
+
+local function LoadStatsData(Plr)
+	local success, data = pcall(function()
+		return StatsData:GetAsync(Plr.UserId)
+	end)
+	
+	local CreateStatObjects = function(Data)
+		local StatsFolder = Instance.new("Folder", Plr) StatsFolder.Name = "StatsFolder"
+		local leaderstats = Instance.new("Folder", Plr) leaderstats.Name = "leaderstats"
+		
+		local Credits = Instance.new("IntValue", leaderstats) Credits.Name = "Credits"
+		Credits.Value = Data.Cash 
+		
+		local Wins = Instance.new("IntValue", leaderstats) Wins.Name = "Wins"
+		Wins.Value = Data.Wins
+		
+		local Awards = Instance.new("IntValue", StatsFolder) Awards.Name = "Awards"
+		Awards.Value = Data.Awards
+		
+		local Donations = Instance.new("IntValue", StatsFolder) Donations.Name = "Donations"
+		Donations.Value = Data.Donations
+		
+		local IsNewPlr = Instance.new("BoolValue", StatsFolder) IsNewPlr.Name = "IsNewPlr"
+		IsNewPlr.Value = Data.IsNewPlr
+		
+		if IsNewPlr.Value == true then
+			task.delay(2,function()
+				
+				StartTutorialRemoteFunction:InvokeClient(Plr)
+				IsNewPlr.Value = false
+
+			end)
+		else
+			Plr.PlayerGui:WaitForChild("Draw").Enabled = true
+		end
+		
+	end 
+	
+	if success then
+		if data then
+			MergeData(data)
+			CreateStatObjects(data)
+		else
+			CreateStatObjects(StarterData)
+		end
+		
+	else
+		Plr:Kick("Data error")
+	end
+	
+	return data
+	
+end
+
+local function LoadPixelData(Plr)
+	local success, data = pcall(function()
+		return PixelDataAvatar01:GetAsync(Plr.UserId)
+	end)
+
+	if not success then
+		Plr:Kick("Data error")
+		return
+	end
+
+	if typeof(data) ~= "table" then
+		data = {}
+	end
+
+	PlrPixelData[Plr] = data
+
+	local Chr = Plr.Character or Plr.CharacterAdded:Wait()
+
+	for _, v in pairs(Chr:GetDescendants()) do
+		if v:IsA("MeshPart") then
+
+			local TextureContent = data[v.MeshId]
+
+			if TextureContent then
+				SetupBodyMeshesScript.ReplicateTextureContent(Plr, TextureContent, v)
+			end
+
+		end
+	end
+end
+
+local function SaveStatsData(Plr)
+	local Data = {
+		Cash = Plr.leaderstats.Credits.Value,
+		Wins = Plr.leaderstats.Wins.Value,
+		Awards = Plr.StatsFolder.Awards.Value,
+		Donations = Plr.StatsFolder.Donations.Value,
+		IsNewPlr = Plr.StatsFolder.IsNewPlr.Value
+	}
+
+	local success, err = pcall(function()
+		StatsData:UpdateAsync(Plr.UserId, function()
+			return Data
+		end)
+	end)
+	
+	if success then
+		print("Data Saved")
+	else
+		warn("Data not saved")
+	end
+
+end
+
+local function SavePixelData(Plr)
+	local Data = PlrPixelData[Plr]
+	if not Data then return end
+	
+	local success, err = pcall(function()
+		PixelDataAvatar01:UpdateAsync(Plr.UserId, function()
+			return Data
+		end)
+	end)
+end
+
+UpdateAvatarEvent.OnServerEvent:Connect(function(Plr, ImageContent, Mesh)
+	PlrPixelData[Plr] = PlrPixelData[Plr] or {}
+	PlrPixelData[Plr][Mesh.MeshId] = ImageContent
+	SetupBodyMeshesScript.ReplicateTextureContent(Plr, ImageContent, Mesh)
+end)
+
+---- Main ----
+
+GetDataFunction.OnInvoke = function(Plr) 
+	return StatsDataFetching[Plr]
+end
+
+
+LoadInventoryFunction.OnServerInvoke = function(Plr)
+	local data = StatsDataFetching[Plr]
+	if data then
+		return data.OwnedBody, data.OwnedAccessories
+	
+	else
+		return {}          
+	end
+end
+
+Players.PlayerAdded:Connect(function(Plr)
+	local Data = LoadStatsData(Plr)
+	StatsDataFetching[Plr] = Data
+	WaitChrLoadedScript.Wait(Plr)
+	
+	SetupBodyMeshesScript.SetupBodyMeshes(Plr, Data)
+	LoadPixelData(Plr)
+end)
+
+Players.PlayerRemoving:Connect(function(Plr)
+	SaveStatsData(Plr)
+	SavePixelData(Plr)
+end)
+
+game:BindToClose(function()
+	for _, Plr in ipairs(Players:GetPlayers()) do
+		SaveStatsData(Plr)
+		SavePixelData(Plr)
+	end
+end)
