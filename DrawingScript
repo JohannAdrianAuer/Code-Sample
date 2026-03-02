@@ -1,0 +1,647 @@
+
+
+DrawingScript (Unfinished)
+
+
+task.wait(2)
+
+local Rs = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local AssetService = game:GetService("AssetService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+
+local Plr = game.Players.LocalPlayer
+local Chr = Plr.Character or Plr.CharacterAdded:Wait()
+local Hum = Chr:WaitForChild("Humanoid")
+local PlrGui = Plr.PlayerGui
+local DrawGui = PlrGui:WaitForChild("Draw")
+
+
+-- Frames --
+
+local ToolFrame = DrawGui:WaitForChild("ToolFrame")
+local ExtendFrame = ToolFrame:WaitForChild("ExtendFrame")
+
+-- Buttons --
+
+local ExtendButton = ExtendFrame.ExtendButton
+
+local PencilButton = ToolFrame.Buttons.PencilButton
+local EraserButton = ToolFrame.Buttons.EraserButton
+local FloodFillButton = ToolFrame.Buttons.FloodFillButton
+local PippeteButton = ToolFrame.Buttons.PippetButton
+local LineButton = ToolFrame.Buttons.LineButton
+local SquareButton = ToolFrame.Buttons.SquareButton
+local CircleButton = ToolFrame.Buttons.CircleButton
+local BodyColorButton = ToolFrame.Buttons.BodyColorButton
+local MirrorX = ToolFrame.Buttons.MirrorX
+local MirrorXY = ToolFrame.Buttons.MirrorXY
+local RedoButton = ToolFrame.Buttons.RedoButton
+local TrashButton = ToolFrame.Buttons.TrashButton
+
+
+-- Variables --
+
+local BrushSize = 3
+local BrushColor = Color3.fromRGB(10, 100, 100)
+local BrushTransparency = 0.1
+local ActiveMirror = "Default"
+local ActiveBrush = "DefaultBrush"
+local ActiveMesh = nil
+local ActiveEditable = nil
+local ActiveEditableBufferCopy = nil
+local IsExtend = true
+local CanDraw = true
+local IsUsingPipette = false
+local LastPosition = nil
+
+local DrawConnection = nil
+local PippeteConnection = nil
+
+local Width = 512
+local Height = 512
+
+local MaxRedo = 15
+
+local Camera = workspace.CurrentCamera
+local Mouse = Plr:GetMouse()
+
+-- Tables --
+
+local RedoTable = {}
+local EditableTable = {}
+local BodyPartTable = {
+	"Head",
+    "UpperTorso",
+    "LowerTorso",
+    "LeftUpperArm",
+    "LeftLowerArm",
+    "LeftHand",
+    "RightUpperArm",
+    "RightLowerArm",
+    "RightHand",
+    "LeftUpperLeg",
+    "LeftLowerLeg",
+    "LeftFoot",
+    "RightUpperLeg",
+    "RightLowerLeg",
+    "RightFoot",
+}
+
+
+-- Modules --
+
+local SetUpEditableScript = require(Rs.ModuleScripts.ClientScripts.DrawScripts.SetUpEditablsScript)
+local TweenPosScript = require(Rs.ModuleScripts.ClientScripts.GuiScripts.TweenPosScript)
+local ColorPickerScript = require(Rs.ModuleScripts.ClientScripts.DrawScripts.ColorPicker)
+local ColorPipetteScript = require(Rs.ModuleScripts.ClientScripts.DrawScripts.ColorPipette)
+local CreateStrokeScript = require(Rs.ModuleScripts.ClientScripts.GuiScripts.CreateStrokeScript)
+
+-- Remotes --
+
+local UpdateAvatarEvent = game.ReplicatedStorage.RemoteEvents.ClientToServer.UpdateAvatar
+
+
+-- Functions --
+
+
+
+local function ExtendToolBox()
+	if IsExtend == true then
+		IsExtend = false
+		ExtendButton.Rotation = 180
+		TweenPosScript.Tween(ToolFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = ToolFrame.Position + UDim2.new(ToolFrame.Size.X.Scale, 0, 0, 0)})
+	else
+		IsExtend = true
+		ExtendButton.Rotation = 0
+		TweenPosScript.Tween(ToolFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quint), {Position = ToolFrame.Position - UDim2.new(ToolFrame.Size.X.Scale, 0, 0, 0)})
+	end
+end
+
+local function DeleteStrokes(frame, matchString, FindMethode)
+	for _, button in ipairs(frame:GetChildren()) do
+		if button:IsA("ImageButton") then
+			if FindMethode == "Find" then
+				if button.Name:find(matchString, 1, true) then
+
+					for _, stroke in ipairs(button:GetChildren()) do
+						if stroke:IsA("UIStroke") then
+
+							stroke:Destroy()
+						end
+					end
+				end
+			else
+				if not button.Name:find(matchString, 1, true) then
+					for _, stroke in ipairs(button:GetChildren()) do
+						if stroke:IsA("UIStroke") then
+							stroke:Destroy()
+						end
+					end
+				end
+			end
+		end
+	end
+end
+
+local function colorClose(r1,g1,b1, r2,g2,b2, tol)
+	return math.abs(r1 - r2) <= tol
+		and math.abs(g1 - g2) <= tol
+		and math.abs(b1 - b2) <= tol
+end
+
+local function floodFill(editable, startX, startY, newR, newG, newB, newA)
+	local size = editable.Size
+	local width  = math.floor(size.X)
+	local height = math.floor(size.Y)
+
+	startX = math.floor(startX)
+	startY = math.floor(startY)
+
+	local RGB_TOL = 50
+	local ALPHA_TOL = 5
+
+	local visited = {}
+
+	local buf = editable:ReadPixelsBuffer(Vector2.zero, size)
+	local bufLen = buffer.len(buf)
+
+	local startIndex = (startY * width + startX) * 4
+	if startIndex < 0 or startIndex + 3 >= bufLen then return end
+
+	local targetR = buffer.readu8(buf, startIndex)
+	local targetG = buffer.readu8(buf, startIndex + 1)
+	local targetB = buffer.readu8(buf, startIndex + 2)
+	local targetA = buffer.readu8(buf, startIndex + 3)
+
+	if targetR == newR and targetG == newG
+		and targetB == newB and targetA == newA then
+		return
+	end
+
+	local stack = { { startX, startY } }
+
+	while #stack > 0 do
+		local node = stack[#stack]
+		stack[#stack] = nil
+		local x, y = node[1], node[2]
+
+		if x < 0 or x >= width or y < 0 or y >= height then
+			continue
+		end
+
+		local key = y * width + x
+		if visited[key] then continue end
+		visited[key] = true
+
+		local i = (y * width + x) * 4
+		if i < 0 or i + 3 >= bufLen then continue end
+
+		local r = buffer.readu8(buf, i)
+		local g = buffer.readu8(buf, i + 1)
+		local b = buffer.readu8(buf, i + 2)
+		local a = buffer.readu8(buf, i + 3)
+
+		if colorClose(r, g, b, targetR, targetG, targetB, RGB_TOL)
+			and math.abs(a - targetA) <= ALPHA_TOL then
+
+			buffer.writeu8(buf, i,     newR)
+			buffer.writeu8(buf, i + 1, newG)
+			buffer.writeu8(buf, i + 2, newB)
+			buffer.writeu8(buf, i + 3, newA)
+
+			stack[#stack+1] = { x+1, y }
+			stack[#stack+1] = { x-1, y }
+			stack[#stack+1] = { x, y+1 }
+			stack[#stack+1] = { x, y-1 }
+		end
+	end
+
+	editable:WritePixelsBuffer(Vector2.zero, size, buf)
+end
+
+local function plot(img, x, y, color)
+	img:DrawRectangle(Vector2.new(x, y), Vector2.new(1,1), color, 1, Enum.ImageCombineType.Overwrite)
+end
+
+
+local function stamp(img, cx, cy, r, color)
+	for x = -r, r do
+		for y = -r, r do
+			if x*x + y*y <= r*r then
+				plot(img, cx + x, cy + y, color)
+			end
+		end
+	end
+end
+
+
+
+local function drawThickLine(img, p1, p2, thickness, color)
+
+	local x1 = math.floor(p1.X+0.5)
+	local y1 = math.floor(p1.Y+0.5)
+	local x2 = math.floor(p2.X+0.5)
+	local y2 = math.floor(p2.Y+0.5)
+
+	local dx = math.abs(x2-x1)
+	local dy = math.abs(y2-y1)
+
+	local sx = x1 < x2 and 1 or -1
+	local sy = y1 < y2 and 1 or -1
+	local err = dx - dy
+
+	local r = math.floor(thickness/2)
+
+	while true do
+		stamp(img, x1, y1, r, color)
+
+		if x1 == x2 and y1 == y2 then break end
+
+		local e2 = err*2
+		if e2 > -dy then err -= dy; x1 += sx end
+		if e2 < dx then err += dx; y1 += sy end
+	end
+end
+
+
+local drawer = {}
+
+function drawer.Draw(player, ContestMode)
+	if player ~= Plr then return end
+	
+	CanDraw = true
+	
+	ExtendButton.MouseButton1Click:Connect(function() ExtendToolBox() end)
+	
+	EditableTable = SetUpEditableScript.SetUpEditable(Chr)
+	ColorPickerScript.Create(Plr, function(Color) BrushColor = Color end)
+	
+	local Whitelist = require(Rs.ModuleScripts.ClientServerScripts.WhiteList).GetList(Chr)
+	
+	local function HandleBrush(Button, BrushName, Icon)
+		Button.MouseButton1Click:Connect(function()
+			if Icon then
+				local mouse = player:GetMouse()
+				mouse.Icon = ""
+				mouse.Icon = Icon
+			else
+				player:GetMouse().Icon = ""
+			end
+
+			if Button == EraserButton then
+				BrushTransparency = 1
+			else
+				if BrushTransparency == 1 then
+					BrushTransparency = 0.1
+				end
+			end
+
+			ActiveBrush = BrushName
+			CanDraw = true
+			DeleteStrokes(ToolFrame.Buttons, "Mirror")
+			CreateStrokeScript.Create(Button, 3, Color3.fromRGB(245,245,245))
+
+			if PippeteConnection then
+				PippeteConnection:Disconnect()
+				PippeteConnection = nil
+			end
+		end)
+	end
+
+
+	local function HandleMirror(Button, MirrorName)
+		Button.MouseButton1Click:Connect(function()
+			if ActiveMirror == MirrorName then
+				ActiveMirror = "NoMirror"
+				DeleteStrokes(ToolFrame.Buttons, "Mirror", "Find")
+			else
+				ActiveMirror = MirrorName
+				DeleteStrokes(ToolFrame.Buttons, "Mirror", "Find")
+				CreateStrokeScript.Create(Button, 3, Color3.fromRGB(245,245,245))
+			end
+		end)
+	end
+
+	HandleMirror(MirrorX, "MirrorX")
+	HandleMirror(MirrorXY, "MirrorY")
+
+	HandleBrush(FloodFillButton, "FloodFillBrush", "rbxassetid://131156920543591")
+	HandleBrush(LineButton, "LineBrush", "rbxassetid://71701523238209")
+	HandleBrush(SquareButton, "SquareBrush", "rbxassetid://71701523238209")
+	HandleBrush(CircleButton, "CircleBrush", "rbxassetid://71701523238209")
+	HandleBrush(PencilButton, "DefaultBrush", "rbxassetid://71701523238209")
+	HandleBrush(EraserButton, "DefaultBrush")
+	
+	PippeteButton.MouseButton1Click:Connect(function()
+		IsUsingPipette = true
+		CanDraw = false
+		BrushTransparency = 0
+		
+		DeleteStrokes(ToolFrame.Buttons, "Mirror")
+		CreateStrokeScript.Create(PippeteButton, 3, Color3.fromRGB(245,245,245))
+		
+		UserInputService.InputBegan:Connect(function(input, gp)
+			if gp then return end
+			if not IsUsingPipette then return end
+			if not (input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch) then return end
+			
+			BrushColor = ColorPipetteScript.GetColor(EditableTable)
+			IsUsingPipette = false
+			CanDraw = true
+			BrushTransparency = 0.9
+			
+		end)
+	end)
+	
+	RedoButton.MouseButton1Click:Connect(function()
+		if #RedoTable == 0 then return end
+
+		local entry = table.remove(RedoTable)
+
+		entry.image:WritePixelsBuffer(
+			Vector2.zero,
+			Vector2.new(Width, Height),
+			entry.buffer
+		)
+	end)
+
+	UserInputService.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			if CanDraw == false then return end
+			
+			
+			DrawConnection = RunService.Heartbeat:Connect(function()				
+				
+				local RayToMesh = workspace.CurrentCamera:ScreenPointToRay(Mouse.X, Mouse.Y)
+				local Params = RaycastParams.new()
+				Params.FilterType = Enum.RaycastFilterType.Include     
+				Params.FilterDescendantsInstances = Whitelist           
+				Params.IgnoreWater = true
+				
+				local raycastResult = workspace:Raycast(RayToMesh.Origin, RayToMesh.Direction * 1000, Params)
+
+				if raycastResult and raycastResult.Instance and EditableTable[raycastResult.Instance] then
+					
+									
+					if ActiveMesh == nil then
+						ActiveMesh = raycastResult.Instance
+					end
+					
+					if raycastResult.Instance ~= ActiveMesh then return end
+					
+					local Mesh = raycastResult.Instance
+					print(Mesh.MeshId)
+					local EditableMesh = EditableTable[Mesh][1]
+					local EditableImage = EditableTable[Mesh][2]
+					
+					local UVRay = Camera:ScreenPointToRay(Mouse.X, Mouse.Y)
+					local Distance = 1000
+					local OriginLocal = Mesh.CFrame:PointToObjectSpace(UVRay.Origin)
+					local DirectionLocal = Mesh.CFrame:VectorToObjectSpace(UVRay.Direction * Distance)
+					
+
+					local FaceId, Point, Bary, v1, v2, v3 = EditableMesh:RaycastLocal(OriginLocal, DirectionLocal)
+					
+					
+					if FaceId then
+						
+						local mirroredPoint = Vector3.new(-Point.X, Point.Y, Point.Z)
+						local offset = 0.001
+						local origin2 = mirroredPoint + Vector3.new(0, 0, offset)
+						local dir2 = (mirroredPoint - origin2).Unit * 1000
+						local mirrorOrigin = Vector3.new(-OriginLocal.X, OriginLocal.Y, OriginLocal.Z)
+						local mirrorDirection = Vector3.new(-DirectionLocal.X, DirectionLocal.Y, DirectionLocal.Z)
+						local mirrorOrigin = Vector3.new(-OriginLocal.X, OriginLocal.Y, OriginLocal.Z)
+						local mirrorDirection = Vector3.new(-DirectionLocal.X, DirectionLocal.Y, DirectionLocal.Z)
+						local FaceId2, Point2, Bary2 = EditableMesh:RaycastLocal(mirrorOrigin, mirrorDirection)
+
+						local MirrorPixelPos
+
+						if FaceId2 then
+							local faceUVs2 = EditableMesh:GetFaceUVs(FaceId2)
+
+							local hitUV2 =
+								Bary2.X * EditableMesh:GetUV(faceUVs2[1]) +
+								Bary2.Y * EditableMesh:GetUV(faceUVs2[2]) +
+								Bary2.Z * EditableMesh:GetUV(faceUVs2[3])
+
+							local MirrorPos = Vector2.new(hitUV2.X, hitUV2.Y)
+							MirrorPixelPos = Vector2.new(MirrorPos.X * Width, MirrorPos.Y * Height)
+						end
+
+
+
+						
+						local faceUVs = EditableMesh:GetFaceUVs(FaceId)
+						local hitUV = Bary.X * EditableMesh:GetUV(faceUVs[1]) +
+							Bary.Y * EditableMesh:GetUV(faceUVs[2]) +
+							Bary.Z * EditableMesh:GetUV(faceUVs[3])
+
+						local imageSize = Vector2.new(Width, Height)
+						local pixelPos = Vector2.new(
+							math.clamp(hitUV.X,0,1) * imageSize.X,
+							math.clamp(hitUV.Y,0,1) * imageSize.Y
+						)
+						
+						if ActiveBrush == "DefaultBrush" then
+							
+							
+							
+							if not ActiveEditable then
+								ActiveEditable = EditableImage
+								ActiveEditableBufferCopy = EditableImage:ReadPixelsBuffer(Vector2.zero, EditableImage.Size)
+								
+								table.insert(RedoTable, {
+									image = EditableImage,
+									buffer = ActiveEditableBufferCopy,
+								})
+								
+								if #RedoTable > MaxRedo then
+									table.remove(RedoTable, 1)
+								end
+							end							
+							
+							EditableImage:DrawCircle(MirrorPixelPos, BrushSize, BrushColor, BrushTransparency, Enum.ImageCombineType.Overwrite)
+							EditableImage:DrawCircle(pixelPos, BrushSize, BrushColor, BrushTransparency, Enum.ImageCombineType.Overwrite)
+							
+						elseif ActiveBrush == "FloodFillBrush" then
+
+							if not ActiveEditable then
+								ActiveEditable = EditableImage
+								ActiveEditableBufferCopy = EditableImage:ReadPixelsBuffer(Vector2.zero, EditableImage.Size)
+
+								table.insert(RedoTable, {
+									image = EditableImage,
+									buffer = ActiveEditableBufferCopy,
+								})
+
+								if #RedoTable > MaxRedo then
+									table.remove(RedoTable, 1)
+								end
+								
+
+								local r = math.clamp(math.round(BrushColor.R * 255), 0, 255)
+								local g = math.clamp(math.round(BrushColor.G * 255), 0, 255)
+								local b = math.clamp(math.round(BrushColor.B * 255), 0, 255)
+								local alpha = math.clamp(math.round((1 - BrushTransparency) * 255), 0, 255)
+								floodFill(EditableImage,  pixelPos.X, pixelPos.Y, r, g, b, alpha)
+								
+							end
+						
+						elseif ActiveBrush == "LineBrush" then
+							if LastPosition == nil then 
+								LastPosition = pixelPos 
+								ActiveEditable = EditableImage
+								ActiveEditableBufferCopy = EditableImage:ReadPixelsBuffer(Vector2.zero, EditableImage.Size)
+								
+								table.insert(RedoTable, {
+									image = EditableImage,
+									buffer = ActiveEditableBufferCopy,
+								})
+
+								if #RedoTable > MaxRedo then
+									table.remove(RedoTable, 1)
+								end
+							end
+							
+							if EditableImage ~= ActiveEditable then return end
+							
+							EditableImage:WritePixelsBuffer(Vector2.zero, EditableImage.Size ,ActiveEditableBufferCopy)
+							drawThickLine(EditableImage, LastPosition, pixelPos, BrushSize, BrushColor)
+							
+						elseif 	ActiveBrush == "SquareBrush" then
+							
+							if LastPosition == nil then 
+								LastPosition = pixelPos 
+								ActiveEditable = EditableImage
+								ActiveEditableBufferCopy = EditableImage:ReadPixelsBuffer(Vector2.zero, EditableImage.Size)
+								
+								table.insert(RedoTable, {
+									image = EditableImage,
+									buffer = ActiveEditableBufferCopy,
+								})
+
+								if #RedoTable > MaxRedo then
+									table.remove(RedoTable, 1)
+								end
+							end
+							
+							if EditableImage ~= ActiveEditable then return end
+
+							EditableImage:WritePixelsBuffer(Vector2.zero, EditableImage.Size ,ActiveEditableBufferCopy)
+							
+							drawThickLine(EditableImage, LastPosition, Vector2.new(pixelPos.X, LastPosition.Y), BrushSize, BrushColor)
+							drawThickLine(EditableImage, LastPosition, Vector2.new(LastPosition.X, pixelPos.Y), BrushSize, BrushColor)
+							drawThickLine(EditableImage, pixelPos, Vector2.new(pixelPos.X, LastPosition.Y), BrushSize, BrushColor)
+							drawThickLine(EditableImage, pixelPos, Vector2.new(LastPosition.X, pixelPos.Y), BrushSize, BrushColor)
+						
+						elseif ActiveBrush == "CircleBrush" then
+							
+							if LastPosition == nil then 
+								LastPosition = pixelPos 
+								ActiveEditable = EditableImage
+								ActiveEditableBufferCopy = EditableImage:ReadPixelsBuffer(Vector2.zero, EditableImage.Size)
+								
+								table.insert(RedoTable, {
+									image = EditableImage,
+									buffer = ActiveEditableBufferCopy,
+								})
+
+								if #RedoTable > MaxRedo then
+									table.remove(RedoTable, 1)
+								end
+								
+							end
+
+							if EditableImage ~= ActiveEditable then return end
+							EditableImage:WritePixelsBuffer(Vector2.zero, EditableImage.Size ,ActiveEditableBufferCopy)
+
+							local Lines = 48
+
+							local Center = (LastPosition + pixelPos) / 2
+
+							local RadiusX = math.abs(pixelPos.X - LastPosition.X) / 2
+							local RadiusY = math.abs(pixelPos.Y - LastPosition.Y) / 2
+
+							local lastPoint = nil
+							local firstPoint = nil
+
+							for i = 0, Lines do
+								local angle = (i / Lines) * math.pi * 2
+
+								local x = math.cos(angle) * RadiusX
+								local y = math.sin(angle) * RadiusY
+
+								local point = Center + Vector2.new(x, y)
+
+								if lastPoint then
+									drawThickLine(
+										EditableImage,
+										lastPoint,
+										point,
+										BrushSize, 
+										BrushColor,
+										BrushTransparency
+									)	
+								else
+									firstPoint = point
+								end
+
+								lastPoint = point
+
+							end
+						
+						end
+					else
+						print("No hit")
+					end
+				else
+					return
+				end
+			end)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1 then
+			if DrawConnection then
+				DrawConnection:Disconnect()
+				DrawConnection = nil
+			end
+			ActiveMesh = nil
+			ActiveEditable = nil
+			ActiveEditableBufferCopy = nil
+			LastPosition = nil
+		end
+	end)
+end
+
+function drawer.Quit()
+	
+	for i, editable in pairs(EditableTable) do
+		local Buffer = editable[2]:ReadPixelsBuffer(Vector2.zero, editable[2].Size)
+		local Encoded = HttpService:JSONEncode(Buffer)
+		UpdateAvatarEvent:FireServer(Encoded, i)
+	    
+	end
+	
+	CanDraw = false
+	ActiveMesh = nil
+	ActiveEditable = nil
+	ActiveEditableBufferCopy = nil
+	LastPosition = nil
+	
+	EditableTable = {}
+	RedoTable = {}
+	
+	if DrawConnection then
+		DrawConnection:Disconnect()
+		DrawConnection = nil
+	end
+	
+end
+
+return drawer
